@@ -78,7 +78,7 @@ class PHist(object):
         try:
             len(bins)
         except TypeError:
-            bins = np.linspace(x.min(), x.max(), bins)
+            bins = np.linspace(x.min(), x.max(), bins + 1)
         self.bins = np.array(bins)
 
         # Pre-compute the bin indices of the samples.
@@ -107,8 +107,11 @@ class PHist(object):
         all the bins is one.
 
         """
-        norm = logsumexp(self.theta + np.log(self.bins[1:] - self.bins[:-1]))
-        return np.exp(self.theta - norm)
+        return np.exp(self._get_log_density(self.theta))
+
+    def _get_log_density(self, values):
+        norm = logsumexp(values + np.log(self.bins[1:] - self.bins[:-1]))
+        return values - norm
 
     def lnlike(self, p):
         """
@@ -120,7 +123,7 @@ class PHist(object):
 
         """
         theta = np.empty(len(p)+2)
-        theta[1:-1] = p - logsumexp(p)
+        theta[1:-1] = self._get_log_density(p)
         theta[0] = -np.inf
         theta[-1] = -np.inf
         return np.sum(logsumexp(theta[self.inds] - self.lnpriors, axis=1))
@@ -133,7 +136,7 @@ class PHist(object):
         """
         return -self.lnlike(p)
 
-    def optimize(self, **kwargs):
+    def optimize(self, minval=-16.0, **kwargs):
         """
         Use ``scipy.optimize.minimize`` to find the maximum marginalized
         likelihood histogram. In particular, this function uses the bounded
@@ -165,13 +168,40 @@ class PHist(object):
         kwargs["bounds"] = [(None, 0)]*len(self.theta)
 
         # Run the optimization to get the maximum likelihood histogram.
-        p0 = self.theta - logsumexp(self.theta)
+        p0 = np.array(self.theta)
+        m = np.isfinite(p0)
+        p0[~m] = np.min(p0[m])
+        p0 -= logsumexp(p0)
         results = minimize(self.nll, p0, **kwargs)
 
         # Save the results of the optimization.
         self.theta = np.array(results.x)
 
         return results
+
+    def sample(self, nsamples=10000, minval=-10.):
+        # Sample some log bin heights from a uniform proposal.
+        thetas = map(self._get_log_density,
+                     minval*np.random.rand(nsamples, len(self.theta)))
+
+        # Compute the marginalized log-probability of each sample.
+        lnprobs = np.array(map(self.lnlike, thetas))
+
+        # Exponentiate the bin heights and compute the mean and variances in
+        # the linear space.
+        thetas = np.exp(thetas)
+
+        # Compute the weights. The proposal was ~1/theta.
+        weights = np.exp(lnprobs - np.max(lnprobs))
+
+        # Find the quantiles.
+        v = np.array([quantile(t, [0.16, 0.5, 0.84], weights=weights)
+                      for t in thetas.T]).T
+
+        # Save the mean result and return the stats.
+        self.theta = v[1]
+
+        return v
 
 
 def phist(x, bins=10, lnpriors=None, verbose=False):
@@ -190,21 +220,52 @@ def phist(x, bins=10, lnpriors=None, verbose=False):
 
     """
     p = PHist(x, bins=bins, lnpriors=lnpriors)
-    p.optimize()
+    print(p.optimize())
     return p.density, p.bins
+
+
+def quantile(x, q, weights=None):
+    """
+    Like numpy.percentile, but:
+
+    * Values of q are quantiles [0., 1.] rather than percentiles [0., 100.]
+    * scalar q not supported (q must be iterable)
+    * optional weights on x
+
+    """
+    if weights is None:
+        return np.percentile(x, [100. * qi for qi in q])
+    idx = np.argsort(x)
+    cdf = np.add.accumulate(weights[idx])
+    cdf /= cdf[-1]
+    return np.interp(q, cdf, x[idx]).tolist()
 
 
 if __name__ == "__main__":
     import matplotlib.pyplot as pl
-    K, N = 500, 1000
+
+    np.random.seed(1234)
+
+    K, N = 40, 500
     means = np.random.randn(K)
-    samples = means[:, None] + 1e-1 * np.random.randn(K, N)
+    err = 1.0
+    samples = ((means + err*np.random.randn(K))[:, None]
+               + err*np.random.randn(K, N))
 
-    values, bins = phist(samples, verbose=True)
+    p = PHist(samples)
+    v_m, v, v_p = p.sample()
+    bins = p.bins
 
-    pl.hist(means, bins, normed=True, histtype="step", color="k", lw=2)
-    pl.plot(np.array(zip(bins[:-1], bins[1:])).flatten(),
-            np.array(zip(values, values)).flatten(), color="r")
+    bin_edges = np.array(zip(bins[:-1], bins[1:])).flatten()
+    mean = np.array(zip(v, v)).flatten()
+    minus = np.array(zip(v_m, v_m)).flatten()
+    plus = np.array(zip(v_p, v_p)).flatten()
+
+    pl.plot(bin_edges, mean, color="k")
+    pl.fill_between(bin_edges, plus, minus, color="k", alpha=0.3)
+
+    pl.hist(means, bins, normed=True, histtype="step", color="r", lw=2)
+
     x = np.linspace(-3, 3, 500)
     pl.plot(x, np.exp(-0.5*x**2)/np.sqrt(2*np.pi))
     pl.savefig("test.png")
