@@ -55,9 +55,13 @@
 \newcommand{\algolabel}[1]{\label{algo:#1}}
 
 % math symbols
-\newcommand{\dd}{\mathrm{d}}
+\newcommand{\dd}{\,\mathrm{d}}
 \newcommand{\bvec}[1]{\boldsymbol{#1}}
 \newcommand{\paramvector}[1]{\bvec{#1}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% other symbols
+\newcommand{\bin}{\ensuremath{\hat{w}}}
 
 \begin{document}
 
@@ -67,7 +71,7 @@
 \newcommand{\mpia}{3}
 \author{Daniel~Foreman-Mackey\altaffilmark{1,\nyu},
         David~W.~Hogg\altaffilmark{\nyu,\mpia},
-        others?}
+        other losers?}
 \altaffiltext{1}{To whom correspondence should be addressed:
                  \url{danfm@nyu.edu}}
 \altaffiltext{\nyu}{Center for Cosmology and Particle Physics,
@@ -84,10 +88,89 @@ Dude.
 
 \section{Introduction}
 
-Dude.
+\section{The Problem}
+
+A histogram with bin edges $\bvec{\bin}$ and normalized bin heights
+$\bvec{\theta}$ for some quantity $w$ can be written as the probability
+density
+\begin{eqnarray}
+p(w\,|\,\bvec{\bin},\,\bvec{\theta}) &=& \left\{\begin{array}{ll}
+\theta_1, & \mathrm{if}\,\bin_0 \le w < \bin_1 \\
+\theta_2, & \mathrm{if}\,\bin_1 \le w < \bin_2 \\
+\multicolumn{2}{c}{\cdots} \\
+\theta_L, & \mathrm{if}\,\bin_{L-1} \le w < \bin_L\\
+0 & \mathrm{otherwise}
+\end{array}\right. \quad.
+\end{eqnarray}
+In practice, a single observation $k$ of $w$ is conditioned on some data
+$\bvec{x}_k$.
+In general, this constraint is given by a posterior probability density
+$p(w_k\,|\,\bvec{x}_k,\,\bvec{\alpha})$ that is---or can be---represented as
+a set of $N$ samples
+\begin{eqnarray}\eqlabel{posts}
+w_k^{(n)} &\sim& p(w_k\,|\,\bvec{x}_k,\,\bvec{\alpha}) \quad.
+\end{eqnarray}
+
+We'll leave the discussion of the choice of bin edges to another time and for
+now just find the best fit bin heights.
+
+In the above situation, there is no closed form solution for ``the best''
+histogram of $w$ given the observations $\bvec{x}$.
+In order to make this question quantitative, let's consider the
+\emph{marginalized likelihood function}
+\begin{eqnarray}\eqlabel{marglike}
+p(\{\bvec{x}_k\}\,|\,\bvec{\theta}) &=&
+\prod_{k=1}^K\int p(w_k,\,\bvec{x}_k\,|\,\bvec{\theta})\dd w_k \\
+&=&
+\prod_{k=1}^K\int p(w_k,\,|\,\bvec{\theta})\,p(\bvec{x}_k\,|\,w_k)\dd w_k
+\quad.
+\end{eqnarray}
+This function quantifies the probability of all observations given a
+particular set of bin heights.
+This question becomes a constrained optimization problem
+\begin{eqnarray}\eqlabel{argmax}
+\bvec{\theta}_\star &=&
+\argmax_{\bvec{\theta}} \log p(\{\bvec{x}_k\}\,|\,\bvec{\theta})
+\end{eqnarray}
+under the constraint
+\begin{eqnarray}
+\int p(w\,|\,\bvec{\theta}) &=& 1
+\end{eqnarray}
+or, equivalently
+\begin{eqnarray}
+\sum_{l=1}^L (\bin_l - \bin_{l-1})\,\theta_l &=& 1 \quad.
+\end{eqnarray}
+
+The key here is to be able to compute \eq{marglike} efficiently given our
+constraints on $w_k$ (\eq{posts}).
+To do this, we can simplify \eq{marglike} as follows
+\begin{eqnarray}
+p(\{\bvec{x}_k\}\,|\,\bvec{\theta}) &=&
+\prod_{k=1}^K\int p(w_k,\,|\,\bvec{\theta})\,p(\bvec{x}_k\,|\,w_k) \,
+\frac{p(w_k\,|\,\bvec{x}_k,\,\bvec{\alpha})}
+     {p(w_k\,|\,\bvec{x}_k,\,\bvec{\alpha})}
+\dd w_k \\
+&=&
+\prod_{k=1}^K\int
+\frac{p(w_k\,|\,\bvec{\theta})}
+     {p(w_k\,|\,\bvec{\alpha})} \,
+p(\bvec{x}_k\,|\,\bvec{\alpha})\,
+p(w_k\,|\,\bvec{x}_k,\,\bvec{\alpha})
+\dd w_k
+\end{eqnarray}
+giving
+\begin{eqnarray}
+\frac{p(\{\bvec{x}_k\}\,|\,\bvec{\theta})}{p(\{\bvec{x}_k\}\,|\,\bvec{\alpha})}
+&\approx&
+\prod_{k=1}^K \frac{1}{N_k} \sum_{n=1}^{N_k}
+\frac{p(w_k^{(n)}\,|\,\bvec{\theta})}
+     {p(w_k^{(n)}\,|\,\bvec{\alpha})}
+\quad.
+\end{eqnarray}
+
 
 \acknowledgments It is a pleasure to thank
-
+\ldots
 for helpful contributions to the ideas and code presented here.
 
 \begin{thebibliography}{}\raggedright
