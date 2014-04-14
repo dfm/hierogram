@@ -27,6 +27,11 @@ except ImportError:
     op = None
 
 try:
+    from scipy.linalg import cho_factor, cho_solve
+except ImportError:
+    cho_factor = None
+
+try:
     from scipy.misc import logsumexp
 except ImportError:
     def logsumexp(a, axis=None, b=None):
@@ -70,7 +75,7 @@ class PHist(object):
 
     """
 
-    def __init__(self, x, bins=10, lnpriors=None):
+    def __init__(self, x, bins=10, rng=None, lnpriors=None):
         # Make sure that the samples have the correct shape.
         x = np.atleast_2d(x)
 
@@ -78,8 +83,14 @@ class PHist(object):
         try:
             len(bins)
         except TypeError:
-            bins = np.linspace(x.min(), x.max(), bins + 1)
+            if rng is None:
+                bins = np.linspace(x.min(), x.max(), bins + 1)
+            else:
+                bins = np.linspace(rng[0], rng[1], bins + 1)
         self.bins = np.array(bins)
+        self.bin_widths = np.diff(self.bins)
+        self.ln_bin_widths = np.log(self.bin_widths)
+        self.bin_centers = self.bins[:-1] + 0.5*self.bin_widths
 
         # Pre-compute the bin indices of the samples.
         self.inds = np.digitize(x.flatten(), bins).reshape(x.shape)
@@ -110,7 +121,7 @@ class PHist(object):
         return np.exp(self._get_log_density(self.theta))
 
     def _get_log_density(self, values):
-        norm = logsumexp(values + np.log(self.bins[1:] - self.bins[:-1]))
+        norm = logsumexp(values + self.ln_bin_widths)
         return values - norm
 
     def lnlike(self, p):
@@ -162,6 +173,7 @@ class PHist(object):
             logging.warn("Using legacy optimization interface. Consider "
                          "upgrading scipy.")
             kwargs.pop("method", None)
+            kwargs["approx_grad"] = True
             minimize = op.fmin_l_bfgs_b
 
         # Ignore any provided bounds.
@@ -179,24 +191,75 @@ class PHist(object):
 
         return results
 
-    def sample(self, nsamples=10000, minval=-10.):
-        # Sample some log bin heights from a uniform proposal.
-        thetas = map(self._get_log_density,
-                     minval*np.random.rand(nsamples, len(self.theta)))
+    def _ess_step(self, f0, ll0, cov, tp=2*np.pi):
+        D = len(f0)
+        nu = np.dot(cov, np.random.randn(D))
+        lny = ll0 + np.log(np.random.rand())
+        th = tp*np.random.rand()
+        thmn, thmx = th-tp, th
+        i = 0
+        while True:
+            fp = f0*np.cos(th) + nu*np.sin(th)
+            ll = self.lnlike(fp)
+            i += 1
+            if ll > lny:
+                return fp, ll
+            if th < 0:
+                thmn = th
+            else:
+                thmx = th
+            th = np.random.uniform(thmn, thmx)
 
-        # Compute the marginalized log-probability of each sample.
-        lnprobs = np.array(map(self.lnlike, thetas))
+    def _lnprior_eval(self, pars, heights):
+        a, s = np.exp(2*pars)
+        cov = a * np.exp(-0.5 * (self.bin_centers[:, None] -
+                                 self.bin_centers[None, :])**2 / s)
+        cov[np.diag_indices_from(cov)] += 1e-8
+        try:
+            factor, flag = cho_factor(cov)
+        except:
+            return -np.inf, cov
+        logdet = np.sum(2*np.log(np.diag(factor)))
+        return -0.5 * (np.dot(heights, cho_solve((factor, flag), heights))
+                       + logdet), cov
 
-        # Exponentiate the bin heights and compute the mean and variances in
-        # the linear space.
-        thetas = np.exp(thetas)
+    def _metropolis_step(self, pars, heights):
+        lp0, cov0 = self._lnprior_eval(pars, heights)
+        q = pars + (np.random.rand(2))*np.random.randn(2)
+        lp1, cov1 = self._lnprior_eval(q, heights)
+        diff = lp1 - lp0
+        if diff >= 0.0 or np.exp(diff) >= np.random.rand():
+            return q, cov1
+        return pars, cov0
 
-        # Compute the weights. The proposal was ~1/theta.
-        weights = np.exp(lnprobs - np.max(lnprobs))
+    def sample(self, nsamples=1000, minval=-10.):
+        if cho_factor is None:
+            raise ImportError("Install scipy to sample")
+
+        x = self.bins[:-1] + 0.5 * np.diff(self.bins)
+        cov = 26**2 * np.exp(-0.5 * ((x[:, None] - x[None, :])/2.0)**2)
+        cov[np.diag_indices_from(cov)] += 1e-10
+        pars = np.log([0.1, 2])
+        print(np.exp(pars))
+
+        theta = np.dot(cov, np.random.randn(len(x)))
+        ll = self.lnlike(theta)
+        samples = np.empty((nsamples, len(x)))
+        hypers = np.empty((nsamples, len(pars)))
+
+        for i in range(nsamples):
+            theta, ll = self._ess_step(theta, ll, cov)
+            samples[i, :] = theta
+            pars, cov = self._metropolis_step(pars, theta)
+            hypers[i, :] = pars
+
+        print(np.median(np.exp(hypers), axis=0))
+
+        samples = map(self._get_log_density, samples[-500:, :])
 
         # Find the quantiles.
-        v = np.array([quantile(t, [0.16, 0.5, 0.84], weights=weights)
-                      for t in thetas.T]).T
+        v = np.array([quantile(t, [0.16, 0.5, 0.84])
+                      for t in np.exp(samples).T]).T
 
         # Save the mean result and return the stats.
         self.theta = v[1]
@@ -246,13 +309,15 @@ if __name__ == "__main__":
 
     np.random.seed(1234)
 
-    K, N = 40, 500
-    means = np.random.randn(K)
-    err = 1.0
-    samples = ((means + err*np.random.randn(K))[:, None]
-               + err*np.random.randn(K, N))
+    K, N = 50, 300
+    means = 10 + np.random.randn(K)
+    err = 0.1 * np.exp(means)
+    means = np.log(np.abs(np.exp(means) + err*np.random.randn(K)))
+    samples = np.log(np.abs(np.exp(means[:, None])
+                            + err[:, None]*np.random.randn(K, N)))
+    print(np.any(~np.isfinite(samples)))
 
-    p = PHist(samples)
+    p = PHist(samples, bins=40, rng=[5, 15])
     v_m, v, v_p = p.sample()
     bins = p.bins
 
@@ -261,11 +326,12 @@ if __name__ == "__main__":
     minus = np.array(zip(v_m, v_m)).flatten()
     plus = np.array(zip(v_p, v_p)).flatten()
 
+    x = np.linspace(5, 15, 500)
+    pl.plot(x, np.exp(-0.5*(x-10)**2)/np.sqrt(2*np.pi))
+
     pl.plot(bin_edges, mean, color="k")
+    pl.plot(bin_edges, plus, color="k")
     pl.fill_between(bin_edges, plus, minus, color="k", alpha=0.3)
 
     pl.hist(means, bins, normed=True, histtype="step", color="r", lw=2)
-
-    x = np.linspace(-3, 3, 500)
-    pl.plot(x, np.exp(-0.5*x**2)/np.sqrt(2*np.pi))
     pl.savefig("test.png")
