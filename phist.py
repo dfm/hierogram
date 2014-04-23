@@ -20,6 +20,7 @@ __license__ = "MIT"
 
 import logging
 import numpy as np
+from abc import ABCMeta, abstractmethod
 
 try:
     import scipy.optimize as op
@@ -57,6 +58,137 @@ except ImportError:
             out = np.log(sum(np.exp(a - a_max), axis=0))
         out += a_max
         return out
+
+
+class BaseModel(object):
+    __metaclass__ = ABCMeta
+
+    def __init__(self, ndim):
+        self.ndim = ndim
+
+    def __len__(self):
+        return self.ndim
+
+    @abstractmethod
+    def initial(self, x):
+        pass
+
+    @abstractmethod
+    def lnrate(self, theta, x):
+        pass
+
+    @abstractmethod
+    def integrate(self, theta):
+        pass
+
+
+class HistogramModel(BaseModel):
+
+    def __init__(self, bins):
+        self.bins = np.array(bins)
+        self.lnwidths = np.log(np.diff(self.bins))
+        super(HistogramModel, self).__init__(len(self.bins) - 1)
+
+    def initial(self, x):
+        return np.log(np.histogram(x, self.bins)[0] + 1)
+
+    def lnrate(self, theta, x):
+        i = np.digitize(x.flatten(), self.bins).reshape(x.shape)
+        h = np.empty(self.ndim + 2)
+        h[0] = -np.inf
+        h[1:-1] = theta
+        h[-1] = -np.inf
+        return h[i]
+
+    def lnprior(self, theta):
+        return np.sum(theta)
+
+    def integrate(self, theta):
+        return np.exp(logsumexp(theta + self.lnwidths))
+
+
+class Population(object):
+    """
+    A probabilistic histogram.
+
+    :param x: ``(K, N)``
+        A list of ``N`` posterior samples for measurements of ``K`` examples.
+
+    :param bins:
+        Either the integer number of bins or an array of bin edges.
+
+    :param lnpriors: ``(K, N)`` or ``None``
+        If not ``None``, this should be an array with the log prior evaluated
+        at the samples given in ``x``.
+
+    """
+
+
+    def __init__(self, model, samples, lnweights=None):
+        self.model = model
+        self.samples = np.asarray(samples)
+        assert len(self.samples.shape) == 2, \
+            "The sample list must be 2d: (K, N). N samples for K examples"
+        if lnweights is None:
+            self.lnweights = np.zeros_like(self.samples, dtype=float)
+        else:
+            self.lnweights = np.atleast_2d(lnweights)
+        assert self.lnweights.shape == self.samples.shape, \
+            "Dimension mismatch"
+
+    def lnlike(self, theta):
+        lnrates = self.model.lnrate(theta, self.samples)
+        if np.any(np.all(np.isinf(lnrates), axis=1)):
+            return -np.inf
+        norm = self.model.integrate(theta)
+        marg = logsumexp(lnrates + self.lnweights, axis=1)
+        return np.sum(marg) - norm
+
+    def initial(self):
+        w = np.exp(self.lnweights)
+        x = np.sum(self.samples * w, axis=1) / np.sum(w, axis=1)
+        return self.model.initial(x)
+
+    def optimize(self, **kwargs):
+        if op is None:
+            raise ImportError("Install scipy to optimize your phist.")
+
+        # Try and support older versions of scipy that don't have the
+        # "minimize" API.
+        if hasattr(op, "minimize"):
+            kwargs["method"] = "L-BFGS-B"
+            minimize = op.minimize
+        else:
+            logging.warn("Using legacy optimization interface. Consider "
+                         "upgrading scipy.")
+            kwargs.pop("method", None)
+            kwargs["approx_grad"] = True
+            minimize = op.fmin_l_bfgs_b
+
+        # Do the optimization.
+        nll = lambda p: -self.lnlike(p)
+        results = minimize(nll, self.initial(), **kwargs)
+
+        print(results)
+
+        return results.x
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as pl
+
+    x = 5 + np.random.randn(1000)
+    x = x[:, None] + 0.01 * np.random.randn(len(x), 128)
+    b = np.linspace(0, 10, 30)
+    p = Population(HistogramModel(b), x)
+    h = p.optimize() + np.log(np.diff(b))
+
+    # n, bn, p = pl.hist(x, p.model.bins, histtype="step", color="k")
+    pl.plot(np.array(zip(b[:-1], b[1:])).flatten(),
+            np.exp(zip(h, h)).flatten(), "k")
+    pl.savefig("hist.png")
+
+    assert 0
 
 
 class PHist(object):
