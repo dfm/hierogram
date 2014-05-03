@@ -2,7 +2,7 @@
 
 from __future__ import division, print_function
 
-__all__ = ["CensoredHierogram"]
+__all__ = ["CensoredHierogram", "PointwiseCensor"]
 
 import numpy as np
 
@@ -20,8 +20,8 @@ class CensoredHierogram(Hierogram):
         self.censor = censor
 
     def lnlike(self, theta):
-        grid = self.lnratefn(theta)
         norm = np.exp(logsumexp(theta + self.censor_integral))
+        grid = self.lnratefn(theta)
         vec = logsumexp(grid[self.inds] + self.censor(self.samples), axis=1)
         vec[~np.isfinite(vec)] = -np.inf
         return np.sum(vec) - norm

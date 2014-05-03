@@ -10,4 +10,4 @@ __license__ = "MIT"
 
 from .gp import GaussianProcess
 from .hierogram import Hierogram
-from .censored import CensoredHierogram
+from . import censored
