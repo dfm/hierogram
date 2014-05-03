@@ -4,14 +4,6 @@ from __future__ import division, print_function
 
 __all__ = ["Hierogram"]
 
-__version__ = "0.0.1"
-
-__author__ = "Dan Foreman-Mackey (danfm@nyu.edu)"
-__contributors__ = []
-
-__copyright__ = "Copyright 2014 Daniel Foreman-Mackey"
-__license__ = "MIT"
-
 import numpy as np
 from itertools import izip
 try:

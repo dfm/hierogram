@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 
-from __future__ import absolute_import
+__all__ = ["GaussianProcess", "Hierogram", "CensoredHierogram"]
 
-__all__ = ["Hierogram", "GaussianProcess"]
+__version__ = "0.0.1"
+__author__ = "Dan Foreman-Mackey (danfm@nyu.edu)"
+__contributors__ = []
+__copyright__ = "Copyright 2014 Daniel Foreman-Mackey"
+__license__ = "MIT"
 
 from .gp import GaussianProcess
 from .hierogram import Hierogram
+from .censored import CensoredHierogram
